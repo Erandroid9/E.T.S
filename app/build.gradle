@@ -1,0 +1,110 @@
+import java.util.Properties
+
+apply plugin: 'com.android.application'
+
+// ===== Manual Configuration =====
+def packageName = "com.erandix.auto"
+def appName = "E.T.S"
+def appCode = 1
+def appVersion = "1"
+def sdkMin = 26         // Minimum API 26
+def sdkCompile = 35
+def colorBlack = "#000000"
+def colorPrimary = "#FFFFFF"
+
+// ===== Load Signing Config (only for release) =====
+def keystorePropsFile = rootProject.file("signing.properties")
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(new FileInputStream(keystorePropsFile))
+} else {
+    println("⚠️ signing.properties not found. Release builds will fail until you add it. Debug builds are fine.")
+}
+
+// ===== Android Configuration =====
+android {
+    namespace packageName
+    compileSdk = sdkCompile
+
+    defaultConfig {
+        applicationId packageName
+        minSdk = sdkMin
+        targetSdk = sdkCompile
+        versionCode appCode
+        versionName appVersion
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+                storeType "pkcs12"
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            // Debug build uses default debug key, no signing.properties needed
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
+
+        release {
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    bundle {
+        language { enableSplit = false }
+        density { enableSplit = false }
+        abi { enableSplit = false }
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
+
+// ===== Update Package Name in Java Files =====
+task updateConfig {
+    doLast {
+        fileTree(dir: 'src/main/java', include: '**/*.java').each { file ->
+            file.text = file.text.replaceAll(/package\s+[^;]+;/, "package ${packageName};")
+        }
+    }
+}
+
+// ===== Copy AAB and Mapping =====
+task copyAabToRoot(type: Copy) {
+    dependsOn "bundleRelease"
+    from("$buildDir/outputs/bundle/release/") { include "*.aab" }
+    from("$buildDir/outputs/mapping/release/") { include "mapping.txt" }
+    into("$rootDir/output")
+    doLast {
+        println "✅ AAB and mapping.txt copied to ${rootDir}/output"
+    }
+}
+
+// ===== Task Dependencies =====
+preBuild.dependsOn updateConfig
+build.finalizedBy copyAabToRoot
+
+// ===== Dependencies =====
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.9.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+}
