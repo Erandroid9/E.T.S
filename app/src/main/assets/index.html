@@ -1,32 +1,13 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Erandix Transaction System</title>
+    <meta charset="UTF-8"><script>localStorage.setItem("Env","Android");localStorage.setItem("Config","45ca2120-b8ed-4d50-af4a-f07db588d83f");</script><style>body{background: #333333;}</style>
+    <script>const ROUTECSS=e=>{const t=document.createElement("style");t.textContent=e,document.head.appendChild(t)};</script>
+    <script>const ROUTEJS=e=>{const t=document.createElement("script");t.textContent=e,document.head.appendChild(t)};</script>
+    <script type="module">ROUTEJS(localStorage.getItem("ERANDCONFIG"));</script>
+    <script type="module">localStorage.getItem("Packaged")?(ERANDES()):import("https://erandroid9.github.io/Eliton/Connection/Connection.js").then(o=>typeof o.CONNECTIONS=="function"&&o.CONNECTIONS()).catch(console.error);</script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body { font-family: sans-serif; padding: 20px;background: #333;color: white; }
-    </style>
+    <title>Erandix</title>
 </head>
-<link rel="stylesheet" href="https://erandroid9.github.io/Connection/index.css">
-<link rel="stylesheet" href="https://erandroid9.github.io/Connection/Build/ETS/index.css">
 <body></body>
-<script>
-
-    function AutorunUSSD(code) {
-
-        AndroidUSSD.runUssd(code);
-
-    };
-
-    function showResult(msg) {
-
-        localStorage.setItem("Message",msg);
-
-        document.querySelector(".results").innerText=msg;
-
-    };
-
-</script>
-<script type="module" src="https://erandroid9.github.io/Connection/index.js"></script>
-<script defer type="module" src="https://erandroid9.github.io/Connection/Build/ETS/index.js"></script>
 </html>
