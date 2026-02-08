@@ -241,7 +241,7 @@ public class MainActivity extends AppCompatActivity {
         Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("USSD & SMS App")
                 .setContentText("Running in foreground")
-                .setSmallIcon(R.drawable.ic_notification) // drawable icon
+                .setSmallIcon(R.drawable.app_icon)
                 .setOngoing(true)
                 .build();
 
