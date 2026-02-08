@@ -18,6 +18,7 @@ import android.os.Looper;
 import android.telephony.SmsManager;
 import android.telephony.SmsMessage;
 import android.telephony.TelephonyManager;
+import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -58,6 +59,12 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                 v.loadUrl(r.getUrl().toString());
+                return true;
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView v, String url) {
+                v.loadUrl(url);
                 return true;
             }
         });
@@ -102,6 +109,17 @@ public class MainActivity extends AppCompatActivity {
 
         TelephonyManager tm = (TelephonyManager) getSystemService(TELEPHONY_SERVICE);
         if (tm == null) return;
+
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
+                != PackageManager.PERMISSION_GRANTED) {
+            pendingUSSDCode = code;
+            ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{Manifest.permission.CALL_PHONE, Manifest.permission.READ_PHONE_STATE},
+                    REQUEST_ALL_PERMISSIONS
+            );
+            return;
+        }
 
         tm.sendUssdRequest(code, new TelephonyManager.UssdResponseCallback() {
             @Override
@@ -184,12 +202,20 @@ public class MainActivity extends AppCompatActivity {
 
     private void sendIncomingSmsToWeb(String from, String msg) {
 
-        from = from.replace("'", "\\'");
-        msg = msg.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n");
+        final String safeFrom = from
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n");
+
+        final String safeMsg = msg
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n");
 
         webView.post(() ->
                 webView.evaluateJavascript(
-                        "if(window.onIncomingSms) onIncomingSms('" + from + "','" + msg + "');",
+                        "if(window.onIncomingSms) onIncomingSms('" +
+                                safeFrom + "','" + safeMsg + "');",
                         null
                 )
         );
@@ -213,9 +239,9 @@ public class MainActivity extends AppCompatActivity {
         }
 
         Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Ready To Serve You")
-                .setContentText("Erandix Monitoring")
-                .setSmallIcon(R.drawable.app_icon)
+                .setContentTitle("USSD & SMS App")
+                .setContentText("Running in foreground")
+                .setSmallIcon(R.drawable.ic_notification) // drawable icon
                 .setOngoing(true)
                 .build();
 
@@ -257,10 +283,14 @@ public class MainActivity extends AppCompatActivity {
        WEB CALLBACK
        ========================= */
     private void sendResultToWeb(String msg) {
-        msg = msg.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n");
+        final String safeMsg = msg
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n");
+
         webView.post(() ->
                 webView.evaluateJavascript(
-                        "if(window.showResult) showResult('" + msg + "');",
+                        "if(window.showResult) showResult('" + safeMsg + "');",
                         null
                 )
         );
@@ -277,6 +307,33 @@ public class MainActivity extends AppCompatActivity {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 c.startActivity(intent);
             }
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == REQUEST_ALL_PERMISSIONS && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+
+            if (pendingUSSDCode != null) {
+                executeUSSD(pendingUSSDCode);
+                pendingUSSDCode = null;
+            }
+
+        } else {
+            sendResultToWeb("Permission denied");
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (webView.canGoBack()) {
+            webView.goBack();
+        } else {
+            super.onBackPressed();
         }
     }
 }
