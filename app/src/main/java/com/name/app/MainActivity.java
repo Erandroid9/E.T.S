@@ -62,9 +62,6 @@ public class MainActivity extends AppCompatActivity {
         webView.loadUrl("file:///android_asset/index.html");
     }
 
-    /* =======================
-       JavaScript Bridge
-       ======================= */
     private class JSBridge {
 
         @JavascriptInterface
@@ -83,9 +80,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /* =======================
-       USSD
-       ======================= */
     private void executeUSSD(String code) {
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
@@ -128,9 +122,6 @@ public class MainActivity extends AppCompatActivity {
         }, new Handler(Looper.getMainLooper()));
     }
 
-    /* =======================
-       SEND SMS
-       ======================= */
     private void executeSendSMS(String phone, String message) {
 
         if (!hasSmsPermissions()) {
@@ -147,9 +138,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /* =======================
-       READ SMS
-       ======================= */
     private void executeReadSMS() {
 
         if (!hasSmsPermissions()) {
@@ -188,9 +176,6 @@ public class MainActivity extends AppCompatActivity {
         sendResultToWeb(smsList.toString());
     }
 
-    /* =======================
-       Permissions
-       ======================= */
     private boolean hasSmsPermissions() {
         return ActivityCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED &&
                ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED;
@@ -238,9 +223,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /* =======================
-       WebView callback
-       ======================= */
     private void sendResultToWeb(String message) {
         String safeMessage = message
                 .replace("\\", "\\\\")
